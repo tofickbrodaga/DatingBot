@@ -1,0 +1,50 @@
+
+version: '3.8'
+
+services:
+  bot_gateway:
+    build: ./bot_gateway
+    depends_on:
+      - user_service
+      - minio
+    environment:
+      TELEGRAM_TOKEN: "6708064233:AAE6yHF5pHxCtWNLLWPGJMU7Zrtrfgz6UvA"
+      MINIO_PUBLIC_URL: "http://192.168.1.100:9000"
+    ports:
+      - "8080:80"
+    networks:
+      - dating_net
+
+  user_service:
+    build: ./user_service
+    ports:
+      - "8000:8000"
+    networks:
+      - dating_net
+
+  rating_service:
+    build: ./rating_service
+    ports:
+      - "8001:8000"
+    networks:
+      - dating_net
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio_data:/data
+    networks:
+      - dating_net
+
+volumes:
+  minio_data:
+
+networks:
+  dating_net:
