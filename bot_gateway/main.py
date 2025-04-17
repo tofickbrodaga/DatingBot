@@ -10,8 +10,7 @@ from aiogram.filters import Command
 from aiogram.types import (
     FSInputFile, Message,
     KeyboardButton, ReplyKeyboardMarkup,
-    ReplyKeyboardRemove
-)
+    ReplyKeyboardRemove)
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
@@ -180,11 +179,11 @@ async def show_preview(message: Message, state: FSMContext):
         gender_icon = "👨" if data["gender"] == "male" else "👩"
         text = (
             f"<b>Вот как выглядит анкета:</b>\n"
-            f"Имя: {data['name']}\n"
-            f"Возраст: {data['age']}\n"
-            f"Пол: {gender_icon}\n"
-            f"Интересы: {', '.join(data['interests'])}\n"
-            f"Город: {data['city']}"
+            f"{data['name']}\n"
+            f"{data['age']}\n"
+            f"{gender_icon}\n"
+            f"{', '.join(data['interests'])}\n"
+            f"{data['city']}"
         )
         kb = ReplyKeyboardMarkup(
             keyboard=[
@@ -249,32 +248,39 @@ async def handle_preview_response(message: Message, state: FSMContext):
         await state.clear()
         await start_profile(message, state)
 
+@router.message(F.text == "📄 Мой профиль")
+async def handle_my_profile_button(message: Message):
+    await show_my_profile(message)
+
 @router.message(Command("myprofile"))
 async def show_my_profile(message: Message):
     user_id = str(message.from_user.id)
     async with aiohttp.ClientSession() as session:
-        async with session.get(
-            f"http://user_service:8000/profile/{user_id}"
-        ) as resp:
+        async with session.get(f"http://user_service:8000/profile/{user_id}") as resp:
             data = await resp.json()
     gender_icon = "👨" if data["gender"] == "male" else "👩"
     text = (
-        f"<b>Твоя анкета:</b>\n"
-        f"Имя: {data['name']}\n"
-        f"Возраст: {data['age']}\n"
-        f"Пол: {gender_icon}\n"
-        f"Интересы: {', '.join(data['interests'])}\n"
-        f"Город: {data['city']}"
+            f"<b>Вот как выглядит анкета:</b>\n"
+            f"{data['name']}\n"
+            f"{data['age']}\n"
+            f"{gender_icon}\n"
+            f"{', '.join(data['interests'])}\n"
+            f"{data['city']}"
     )
     if data.get("photos"):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(data['photos'][0]) as resp:
-                img = await resp.read()
+        photo_src = data['photos'][0]
+        object_name = photo_src.rsplit('/', 1)[-1]
+        minio_obj = minio_client.get_object(BUCKET_NAME, object_name)
+        content = minio_obj.read()
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            tmp.write(img)
+            tmp.write(content)
             tmp_path = tmp.name
         photo_file = FSInputFile(tmp_path)
-        await message.answer_photo(photo_file, caption=text, parse_mode=ParseMode.HTML)
+        await message.answer_photo(
+            photo_file,
+            caption=text,
+            parse_mode=ParseMode.HTML
+        )
     else:
         await message.answer("❌ Анкета не найдена.")
 
