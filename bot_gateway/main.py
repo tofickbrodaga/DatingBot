@@ -18,6 +18,7 @@ from aiogram.fsm.context import FSMContext
 from config import minio_client, BUCKET_NAME, MINIO_PUBLIC_URL, r
 from matching_handlers import get_router as get_match_router
 from io import BytesIO
+from aiogram.filters import Command
 
 
 logging.basicConfig(level=logging.INFO)
@@ -212,6 +213,42 @@ async def handle_preview_response(message: Message, state: FSMContext):
     elif "заново" in text:
         await state.clear()
         await start_profile(message, state)
+
+
+@router.message(F.text == "📄 Мой профиль")
+@router.message(Command("myprofile"))
+async def show_my_profile(message: Message):
+    user_id = str(message.from_user.id)
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"http://user_service:8000/profile/{user_id}") as resp:
+            if resp.status != 200:
+                await message.answer("❌ Анкета не найдена.")
+                return
+            data = await resp.json()
+
+    gender_icon = "👨" if data["gender"] == "male" else "👩"
+    text = (
+        f"<b>Вот как выглядит анкета:</b>\n"
+        f"{data['name']}\n"
+        f"{data['age']}\n"
+        f"{gender_icon}\n"
+        f"{', '.join(data['interests'])}\n"
+        f"{data['city']}"
+    )
+
+    if data.get("photos"):
+        photo_url = data['photos'][0]
+        object_name = photo_url.rsplit("/", 1)[-1]
+        response = minio_client.get_object(BUCKET_NAME, object_name)
+        content = response.read()
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        photo_file = FSInputFile(tmp_path)
+        await message.answer_photo(photo_file, caption=text, parse_mode=ParseMode.HTML)
+    else:
+        await message.answer(text, parse_mode=ParseMode.HTML)
+
 
 app = FastAPI()
 dp.include_router(router)
