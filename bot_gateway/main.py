@@ -19,7 +19,7 @@ from config import minio_client, BUCKET_NAME, MINIO_PUBLIC_URL, r
 from matching_handlers import get_router as get_match_router
 from io import BytesIO
 from aiogram.filters import Command
-from like_handlers import router as like_router
+from like_handlers import like_router
 
 
 logging.basicConfig(level=logging.INFO)
@@ -191,6 +191,7 @@ async def handle_preview_response(message: Message, state: FSMContext):
         profile = {
             "user_id": str(message.from_user.id),
             "name": data['name'],
+            "username": message.from_user.username,
             "age": data['age'],
             "gender": data['gender'],
             "interests": data['interests'],

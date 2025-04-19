@@ -10,6 +10,7 @@ profiles = {}
 
 class ProfileCreate(BaseModel):
     user_id: str
+    username: str
     name: str
     age: int
     gender: str
@@ -18,6 +19,7 @@ class ProfileCreate(BaseModel):
     photos: List[str]
     latitude: float
     longitude: float
+
 
 @app.post("/profile")
 def create_profile(profile: ProfileCreate):
