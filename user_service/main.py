@@ -30,3 +30,7 @@ def get_profile(user_id: str):
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
     return profile
+
+@app.get("/users")
+def get_users():
+    return list(profiles.values())

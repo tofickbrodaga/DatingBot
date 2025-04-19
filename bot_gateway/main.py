@@ -10,35 +10,24 @@ from aiogram.filters import Command
 from aiogram.types import (
     FSInputFile, Message,
     KeyboardButton, ReplyKeyboardMarkup,
-    ReplyKeyboardRemove)
+    ReplyKeyboardRemove
+)
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
-from minio import Minio
+from config import minio_client, BUCKET_NAME, MINIO_PUBLIC_URL, r
+from matching_handlers import get_router as get_match_router
 from io import BytesIO
 
-event_loop = asyncio.get_event_loop()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "fake")
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minio")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minio123")
-BUCKET_NAME = os.getenv("MINIO_BUCKET", "user-photos")
 
 bot = Bot(token=TELEGRAM_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
-
-minio_client = Minio(
-    endpoint=MINIO_ENDPOINT,
-    access_key=MINIO_ACCESS_KEY,
-    secret_key=MINIO_SECRET_KEY,
-    secure=False
-)
-if not minio_client.bucket_exists(BUCKET_NAME):
-    minio_client.make_bucket(BUCKET_NAME)
 
 class ProfileFSM(StatesGroup):
     name = State()
@@ -53,9 +42,7 @@ class ProfileFSM(StatesGroup):
 @router.message(Command("start"))
 async def start_profile(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(
-        "Как тебя зовут?", reply_markup=ReplyKeyboardRemove()
-    )
+    await message.answer("Как тебя зовут?", reply_markup=ReplyKeyboardRemove())
     await state.set_state(ProfileFSM.name)
 
 @router.message(ProfileFSM.name)
@@ -91,13 +78,11 @@ async def handle_interests(message: Message, state: FSMContext):
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="📍 Отправить координаты", request_location=True)],
-            [KeyboardButton(text="🏙 Ввести город вручную")]
+            [KeyboardButton(text="🌍 Ввести город вручную")]
         ],
         resize_keyboard=True
     )
-    await message.answer(
-        "Хочешь указать координаты или ввести город?", reply_markup=kb
-    )
+    await message.answer("Хочешь указать координаты или ввести город?", reply_markup=kb)
     await state.set_state(ProfileFSM.city_or_geo)
 
 @router.message(ProfileFSM.city_or_geo, F.location)
@@ -116,22 +101,16 @@ async def handle_location(message: Message, state: FSMContext):
         or data.get("address", {}).get("village")
     )
     if not city:
-        await message.answer(
-            "Не удалось определить город. Введи его вручную."
-        )
+        await message.answer("Не удалось определить город. Введи его вручную.")
         await state.set_state(ProfileFSM.city)
         return
     await state.update_data(city=city, latitude=lat, longitude=lon)
-    await message.answer(
-        "Отправь 1–2 фото профиля", reply_markup=ReplyKeyboardRemove()
-    )
+    await message.answer("Отправь 1–2 фото профиля", reply_markup=ReplyKeyboardRemove())
     await state.set_state(ProfileFSM.photos)
 
 @router.message(ProfileFSM.city_or_geo, F.text)
 async def ask_manual_city(message: Message, state: FSMContext):
-    await message.answer(
-        "Окей, введи свой город:", reply_markup=ReplyKeyboardRemove()
-    )
+    await message.answer("Окей, введи свой город:", reply_markup=ReplyKeyboardRemove())
     await state.set_state(ProfileFSM.city)
 
 @router.message(ProfileFSM.city)
@@ -152,7 +131,6 @@ async def handle_photos(message: Message, state: FSMContext):
             f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/"
             f"{tg_file.file_path}"
         )
-        logger.info(f"Downloading photo from Telegram: {download_url}")
         async with aiohttp.ClientSession() as session:
             async with session.get(download_url) as resp:
                 content = await resp.read()
@@ -166,7 +144,6 @@ async def handle_photos(message: Message, state: FSMContext):
         )
         photos.append(object_name)
         await state.update_data(photos=photos)
-        logger.info(f"Photo stored in MinIO as: {object_name}")
         await show_preview(message, state)
     except Exception as e:
         logger.exception("Error in handle_photos")
@@ -174,7 +151,6 @@ async def handle_photos(message: Message, state: FSMContext):
 
 async def show_preview(message: Message, state: FSMContext):
     try:
-        await message.answer("🔄 Формирую превью анкеты...")
         data = await state.get_data()
         gender_icon = "👨" if data["gender"] == "male" else "👩"
         text = (
@@ -193,19 +169,13 @@ async def show_preview(message: Message, state: FSMContext):
             resize_keyboard=True
         )
         object_name = data['photos'][0]
-        logger.info(f"Downloading preview photo from MinIO obj: {object_name}")
         resp = minio_client.get_object(BUCKET_NAME, object_name)
         content = resp.read()
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
         photo_file = FSInputFile(tmp_path)
-        await message.answer_photo(
-            photo_file,
-            caption=text,
-            parse_mode=ParseMode.HTML,
-            reply_markup=kb
-        )
+        await message.answer_photo(photo_file, caption=text, parse_mode=ParseMode.HTML, reply_markup=kb)
         await state.set_state(ProfileFSM.preview)
     except Exception as e:
         logger.exception("Error in show_preview")
@@ -223,18 +193,13 @@ async def handle_preview_response(message: Message, state: FSMContext):
             "gender": data['gender'],
             "interests": data['interests'],
             "city": data['city'],
-            "photos": [
-                f"http://{MINIO_ENDPOINT}/{BUCKET_NAME}/{obj}"
-                for obj in data['photos']
-            ],
+            "photos": [f"{MINIO_PUBLIC_URL}/{BUCKET_NAME}/{obj}" for obj in data['photos']],
             "latitude": data['latitude'],
             "longitude": data['longitude']
         }
         async with aiohttp.ClientSession() as session:
-            await session.post(
-                "http://user_service:8000/profile",
-                json=profile
-            )
+            await session.post("http://user_service:8000/profile", json=profile)
+
         kb = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="📄 Мой профиль")],
@@ -248,45 +213,13 @@ async def handle_preview_response(message: Message, state: FSMContext):
         await state.clear()
         await start_profile(message, state)
 
-@router.message(F.text == "📄 Мой профиль")
-async def handle_my_profile_button(message: Message):
-    await show_my_profile(message)
-
-@router.message(Command("myprofile"))
-async def show_my_profile(message: Message):
-    user_id = str(message.from_user.id)
-    async with aiohttp.ClientSession() as session:
-        async with session.get(f"http://user_service:8000/profile/{user_id}") as resp:
-            data = await resp.json()
-    gender_icon = "👨" if data["gender"] == "male" else "👩"
-    text = (
-            f"<b>Вот как выглядит анкета:</b>\n"
-            f"{data['name']}\n"
-            f"{data['age']}\n"
-            f"{gender_icon}\n"
-            f"{', '.join(data['interests'])}\n"
-            f"{data['city']}"
-    )
-    if data.get("photos"):
-        photo_src = data['photos'][0]
-        object_name = photo_src.rsplit('/', 1)[-1]
-        minio_obj = minio_client.get_object(BUCKET_NAME, object_name)
-        content = minio_obj.read()
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-        photo_file = FSInputFile(tmp_path)
-        await message.answer_photo(
-            photo_file,
-            caption=text,
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await message.answer("❌ Анкета не найдена.")
-
 app = FastAPI()
 dp.include_router(router)
+dp.include_router(get_match_router(minio_client, BUCKET_NAME))
 
 @app.on_event("startup")
 async def on_startup():
+    for key in r.scan_iter("shown_user_ids:*"):
+        r.delete(key)
+    print("🧹 Redis очищен: shown_user_ids:*")
     asyncio.create_task(dp.start_polling(bot))
