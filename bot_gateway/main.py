@@ -19,6 +19,7 @@ from config import minio_client, BUCKET_NAME, MINIO_PUBLIC_URL, r
 from matching_handlers import get_router as get_match_router
 from io import BytesIO
 from aiogram.filters import Command
+from like_handlers import router as like_router
 
 
 logging.basicConfig(level=logging.INFO)
@@ -253,6 +254,8 @@ async def show_my_profile(message: Message):
 app = FastAPI()
 dp.include_router(router)
 dp.include_router(get_match_router(minio_client, BUCKET_NAME))
+dp.include_router(like_router)
+
 
 @app.on_event("startup")
 async def on_startup():
