@@ -7,12 +7,8 @@ services:
       - user_service
       - minio
       - matchmaking_service
-    environment:
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      TELEGRAM_TOKEN: "6708064233:AAE6yHF5pHxCtWNLLWPGJMU7Zrtrfgz6UvA"
-      MINIO_PUBLIC_URL: "http://192.168.1.100:9000"
-      MATCH_SERVICE_URL: "http://matchmaking_service:8000/match"
+    env_file:
+      - .env
     ports:
       - "8080:80"
     networks:
@@ -36,11 +32,10 @@ services:
     build: ./matchmaking_service
     depends_on:
       - redis
+    env_file:
+      - .env
     networks:
       - dating_net
-    environment:
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
 
   redis:
     image: redis:7
