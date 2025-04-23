@@ -1,25 +1,22 @@
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 app = FastAPI()
 
-users = {}
 profiles = {}
 
 class ProfileCreate(BaseModel):
     user_id: str
-    username: str
     name: str
     age: int
     gender: str
-    interests: List[str]
+    interests: Optional[List[str]] = []
     city: str
     photos: List[str]
     latitude: float
     longitude: float
-
+    username: Optional[str] = None
 
 @app.post("/profile")
 def create_profile(profile: ProfileCreate):
