@@ -79,10 +79,7 @@ def get_router(minio_client, bucket_name):
 
         if vote == "like":
             r.rpush(f"liked_by:{liked_user_id}", user_id)
-
-            # Проверка на взаимный лайк
             if r.hget(f"votes:{liked_user_id}", str(user_id)) == "like":
-                # Мэтч!
                 contact = f"ID: {liked_user_id}"
                 try:
                     async with aiohttp.ClientSession() as session:

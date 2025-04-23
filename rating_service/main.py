@@ -1,26 +1,30 @@
-
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from pydantic import BaseModel
+from typing import List
 
 app = FastAPI()
-ratings = {}
 
-class RatingInput(BaseModel):
-    user_id: str
-    profile_completeness: float  # 0–1
-    photos_count: int
-    preferred_city: str
-    preferred_gender: str
+class Profile(BaseModel):
+    name: str
+    age: int
+    gender: str
+    interests: List[str] = []
+    city: str
+    photos: List[str]
 
 @app.post("/rate")
-def rate(data: RatingInput):
+async def rate(profile: Profile):
     score = 0
-    score += data.profile_completeness * 5
-    score += min(data.photos_count, 5) * 1
-    score += 2  # предпочтения
-    ratings[data.user_id] = score
-    return {"user_id": data.user_id, "score": score}
+    score += min(len(profile.photos), 5)
+    if profile.name:
+        score += 1
+    if profile.age:
+        score += 1
+    if profile.gender:
+        score += 1
+    if profile.city:
+        score += 1
+    if profile.interests:
+        score += 1
 
-@app.get("/score/{user_id}")
-def get_score(user_id: str):
-    return {"user_id": user_id, "score": ratings.get(user_id, 0)}
+    return {"rating": score}

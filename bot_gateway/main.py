@@ -181,19 +181,32 @@ async def handle_preview_response(message: Message, state: FSMContext):
             "longitude": data['longitude'],
             "username": message.from_user.username
         }
+
         async with aiohttp.ClientSession() as session:
             async with session.post("http://user_service:8000/profile", json=profile) as resp:
                 await resp.text()
+            try:
+                async with session.post("http://rating_service:8000/rate", json=profile) as resp:
+                    rating_data = await resp.json()
+                    rating = rating_data.get("rating")
+                    logger.info(f"✅ Рейтинг анкеты: {rating}")
+            except Exception as e:
+                logger.warning(f"❌ Не удалось получить рейтинг: {e}")
 
         kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="📄 Мой профиль")], [KeyboardButton(text="💘 Начать поиск")]],
+            keyboard=[
+                [KeyboardButton(text="📄 Мой профиль")],
+                [KeyboardButton(text="💘 Начать поиск")]
+            ],
             resize_keyboard=True
         )
         await message.answer("✅ Анкета успешно сохранена!", reply_markup=kb)
         await state.clear()
+
     elif "заново" in text:
         await state.clear()
         await start_profile(message, state)
+
 
 async def show_preview(message: Message, data: dict):
     gender_icon = "👨" if data["gender"] == "male" else "👩"
@@ -228,6 +241,62 @@ async def show_preview(message: Message, data: dict):
         await bot.send_media_group(chat_id=message.chat.id, media=media)
     else:
         await bot.send_photo(chat_id=message.chat.id, photo=media[0].media, caption=caption, parse_mode=ParseMode.HTML)
+
+@router.message(F.text == "📄 Мой профиль")
+@router.message(Command("myprofile"))
+async def show_my_profile(message: Message):
+    user_id = str(message.from_user.id)
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"http://user_service:8000/profile/{user_id}") as resp:
+            if resp.status != 200:
+                await message.answer("❌ Анкета не найдена.")
+                return
+            data = await resp.json()
+
+        try:
+            async with session.get(f"http://rating_service:8000/rate/{user_id}") as resp:
+                rating = (await resp.json()).get("rating", "—")
+        except:
+            rating = "—"
+
+    gender_icon = "👨" if data["gender"] == "male" else "👩"
+    interests = ', '.join(data["interests"]) if data["interests"] else "—"
+
+    caption = (
+        f"<b>Вот как выглядит анкета:</b>\n\n"
+        f"👤 Имя: {data['name']}\n"
+        f"🎂 Возраст: {data['age']}\n"
+        f"{gender_icon} Пол: {'Мужской' if data['gender'] == 'male' else 'Женский'}\n"
+        f"🎯 Интересы: {interests}\n"
+        f"📍 Город: {data['city']}\n"
+        f"⭐ Рейтинг: {rating}/100"
+    )
+
+    media = []
+    for i, photo_url in enumerate(data['photos']):
+        object_name = photo_url.rsplit("/", 1)[-1]
+        file = minio_client.get_object(BUCKET_NAME, object_name)
+        content = file.read()
+        file.close()
+        file.release_conn()
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+        tmp.write(content)
+        tmp_path = tmp.name
+        tmp.close()
+
+        file_input = FSInputFile(tmp_path)
+        if i == 0:
+            media.append(InputMediaPhoto(media=file_input, caption=caption, parse_mode=ParseMode.HTML))
+        else:
+            media.append(InputMediaPhoto(media=file_input))
+
+    if len(media) > 1:
+        await bot.send_media_group(chat_id=message.chat.id, media=media)
+    else:
+        await bot.send_photo(chat_id=message.chat.id, photo=media[0].media, caption=caption, parse_mode=ParseMode.HTML)
+
 
 app = FastAPI()
 dp.include_router(router)
