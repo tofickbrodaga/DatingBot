@@ -244,6 +244,8 @@ async def show_preview(message: Message, data: dict):
 
 @router.message(F.text == "📄 Мой профиль")
 @router.message(Command("myprofile"))
+@router.message(F.text == "📄 Мой профиль")
+@router.message(Command("myprofile"))
 async def show_my_profile(message: Message):
     user_id = str(message.from_user.id)
 
@@ -254,48 +256,52 @@ async def show_my_profile(message: Message):
                 return
             data = await resp.json()
 
+        rating = None
         try:
-            async with session.get(f"http://rating_service:8000/rate/{user_id}") as resp:
-                rating = (await resp.json()).get("rating", "—")
-        except:
-            rating = "—"
+            async with session.post("http://rating_service:8000/rate", json=data) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    rating = result.get("rating", "--")
+        except Exception as e:
+            logging.warning(f"Не удалось получить рейтинг: {e}")
 
     gender_icon = "👨" if data["gender"] == "male" else "👩"
-    interests = ', '.join(data["interests"]) if data["interests"] else "—"
+    interests = ', '.join(data['interests']) if data['interests'] else '—'
+    rating_text = f"{rating or '--'}/100"
 
-    caption = (
+    text = (
         f"<b>Вот как выглядит анкета:</b>\n\n"
         f"👤 Имя: {data['name']}\n"
         f"🎂 Возраст: {data['age']}\n"
         f"{gender_icon} Пол: {'Мужской' if data['gender'] == 'male' else 'Женский'}\n"
         f"🎯 Интересы: {interests}\n"
         f"📍 Город: {data['city']}\n"
-        f"⭐ Рейтинг: {rating}/100"
+        f"⭐ Рейтинг: {rating_text}"
     )
 
-    media = []
-    for i, photo_url in enumerate(data['photos']):
-        object_name = photo_url.rsplit("/", 1)[-1]
-        file = minio_client.get_object(BUCKET_NAME, object_name)
-        content = file.read()
-        file.close()
-        file.release_conn()
+    if data.get("photos"):
+        media = []
+        for idx, photo_url in enumerate(data['photos']):
+            object_name = photo_url.rsplit("/", 1)[-1]
+            file = minio_client.get_object(BUCKET_NAME, object_name)
+            content = file.read()
+            file.close()
+            file.release_conn()
+            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+            tmp_file.write(content)
+            tmp_file.close()
+            fs_file = FSInputFile(tmp_file.name)
+            if idx == 0:
+                media.append(InputMediaPhoto(media=fs_file, caption=text, parse_mode=ParseMode.HTML))
+            else:
+                media.append(InputMediaPhoto(media=fs_file))
 
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-        tmp.write(content)
-        tmp_path = tmp.name
-        tmp.close()
-
-        file_input = FSInputFile(tmp_path)
-        if i == 0:
-            media.append(InputMediaPhoto(media=file_input, caption=caption, parse_mode=ParseMode.HTML))
+        if len(media) > 1:
+            await bot.send_media_group(chat_id=message.chat.id, media=media)
         else:
-            media.append(InputMediaPhoto(media=file_input))
-
-    if len(media) > 1:
-        await bot.send_media_group(chat_id=message.chat.id, media=media)
+            await bot.send_photo(chat_id=message.chat.id, photo=media[0].media, caption=text, parse_mode=ParseMode.HTML)
     else:
-        await bot.send_photo(chat_id=message.chat.id, photo=media[0].media, caption=caption, parse_mode=ParseMode.HTML)
+        await message.answer(text, parse_mode=ParseMode.HTML)
 
 
 app = FastAPI()
