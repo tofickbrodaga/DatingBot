@@ -5,7 +5,7 @@ import tempfile
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, FSInputFile, InputMediaPhoto
 from aiogram.enums import ParseMode
-from config import r, minio_client, BUCKET_NAME
+from config import r
 from keyboards.match import like_dislike_kb
 from keyboards.liked_back import liked_back_kb
 

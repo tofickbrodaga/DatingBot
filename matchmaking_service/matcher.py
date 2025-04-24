@@ -1,7 +1,6 @@
 import requests
 import os
 import redis
-import json
 
 USER_SERVICE_URL = os.getenv("USER_SERVICE_URL", "http://user_service:8000")
 REDIS_HOST = os.getenv("REDIS_HOST", "redis")

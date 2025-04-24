@@ -5,7 +5,6 @@ from keyboards.match import like_dislike_kb
 from config import r, minio_client, BUCKET_NAME
 import aiohttp
 import tempfile
-from io import BytesIO
 import logging
 import os
 
