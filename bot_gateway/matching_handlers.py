@@ -3,7 +3,7 @@ import logging
 import aiohttp
 import tempfile
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery, FSInputFile, InputMediaPhoto
 from aiogram.enums import ParseMode
 from config import r, minio_client, BUCKET_NAME
 from keyboards.match import like_dislike_kb
@@ -18,8 +18,6 @@ def get_router(minio_client, bucket_name):
     @router.message(F.text == "💘 Начать поиск")
     async def show_match(message: Message):
         user_id = message.from_user.id
-
-        # Если пользователь никого не лайкал, но его лайкали
         user_votes = r.hkeys(f"votes:{user_id}")
         liked_by = r.lrange(f"liked_by:{user_id}", 0, -1)
 
@@ -45,24 +43,34 @@ def get_router(minio_client, bucket_name):
             return
 
         profile = profiles[0]
-        text = f"<b>{profile['name']}, {profile['age']}</b>\n📍 {profile['city']}"
+        text = (
+            f"<b>{profile['name']}, {profile['age']}</b>\n"
+            f"📍 {profile['city']}"
+        )
 
-        photo_url = profile["photos"][0]
-        object_name = photo_url.rsplit("/", 1)[-1]
-        resp = minio_client.get_object(bucket_name, object_name)
-        content = resp.read()
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-        photo_file = FSInputFile(tmp_path)
+        media = []
+        for idx, photo_url in enumerate(profile["photos"]):
+            object_name = photo_url.rsplit("/", 1)[-1]
+            resp = minio_client.get_object(bucket_name, object_name)
+            content = resp.read()
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            input_file = FSInputFile(tmp_path)
+            if idx == 0:
+                media.append(InputMediaPhoto(media=input_file, caption=text, parse_mode="HTML"))
+            else:
+                media.append(InputMediaPhoto(media=input_file))
 
-        msg = await message.answer_photo(
-            photo_file,
-            caption=text,
-            parse_mode="HTML",
+        msgs = await bot.send_media_group(chat_id=message.chat.id, media=media)
+
+        buttons_msg = await bot.send_message(
+            chat_id=message.chat.id,
+            text="👍 Лайк или 👎 Дизлайк?",
             reply_markup=like_dislike_kb()
         )
-        r.set(f"match_message:{msg.message_id}", profile["user_id"])
+
+        r.set(f"match_message:{buttons_msg.message_id}", profile["user_id"])
 
     @router.callback_query(F.data.in_({"like", "dislike"}))
     async def handle_vote(callback: CallbackQuery):
@@ -75,24 +83,23 @@ def get_router(minio_client, bucket_name):
             return
 
         vote = callback.data
-        r.hset(f"votes:{user_id}", liked_user_id, vote)
+        key = f"votes:{user_id}"
+        r.hset(key, liked_user_id, vote)
 
         if vote == "like":
             r.rpush(f"liked_by:{liked_user_id}", user_id)
             if r.hget(f"votes:{liked_user_id}", str(user_id)) == "like":
-                contact = f"ID: {liked_user_id}"
                 try:
                     async with aiohttp.ClientSession() as session:
                         async with session.get(f"http://user_service:8000/profile/{liked_user_id}") as resp:
                             if resp.status == 200:
                                 profile = await resp.json()
                                 username = profile.get("username")
-                                if username:
-                                    contact = f"https://t.me/{username}"
+                                contact = f"https://t.me/{username}" if username else f"ID: {liked_user_id}"
+                            else:
+                                contact = f"ID: {liked_user_id}"
                 except Exception:
-                    pass
-
-                sender_contact = f"https://t.me/{callback.from_user.username}" if callback.from_user.username else f"ID: {user_id}"
+                    contact = f"ID: {liked_user_id}"
 
                 await bot.send_message(
                     user_id,
@@ -100,7 +107,7 @@ def get_router(minio_client, bucket_name):
                 )
                 await bot.send_message(
                     liked_user_id,
-                    f"🎉 У вас мэтч с пользователем!\nСвяжитесь: {sender_contact}"
+                    f"🎉 У вас мэтч с пользователем!\nСвяжитесь: https://t.me/{callback.from_user.username}" if callback.from_user.username else f"ID: {user_id}"
                 )
 
         await callback.answer("👍 Голос учтён")
@@ -125,18 +132,28 @@ def get_router(minio_client, bucket_name):
                     return
                 profile = await resp.json()
 
-        photo_url = profile["photos"][0]
-        object_name = photo_url.rsplit("/", 1)[-1]
-        resp = minio_client.get_object(bucket_name, object_name)
-        content = resp.read()
-        with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-        photo_file = FSInputFile(tmp_path)
-
         text = f"<b>{profile['name']}, {profile['age']}</b>\n📍 {profile['city']}"
-        msg = await callback.message.answer_photo(photo_file, caption=text, parse_mode="HTML", reply_markup=like_dislike_kb())
-        r.set(f"match_message:{msg.message_id}", next_user_id)
+        media = []
+        for idx, photo_url in enumerate(profile["photos"]):
+            object_name = photo_url.rsplit("/", 1)[-1]
+            resp = minio_client.get_object(bucket_name, object_name)
+            content = resp.read()
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            input_file = FSInputFile(tmp_path)
+            if idx == 0:
+                media.append(InputMediaPhoto(media=input_file, caption=text, parse_mode="HTML"))
+            else:
+                media.append(InputMediaPhoto(media=input_file))
+
+        msgs = await bot.send_media_group(chat_id=callback.message.chat.id, media=media)
+        buttons_msg = await bot.send_message(
+            chat_id=callback.message.chat.id,
+            text="👍 Лайк или 👎 Дизлайк?",
+            reply_markup=like_dislike_kb()
+        )
+        r.set(f"match_message:{buttons_msg.message_id}", next_user_id)
         await callback.message.delete()
 
     @router.callback_query(F.data == "ignore_likers")

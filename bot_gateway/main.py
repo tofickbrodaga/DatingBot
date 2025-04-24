@@ -11,8 +11,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import (
     FSInputFile, Message, InputMediaPhoto,
-    KeyboardButton, ReplyKeyboardMarkup,
-    ReplyKeyboardRemove
+    KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 )
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.state import State, StatesGroup
@@ -24,12 +23,10 @@ from io import BytesIO
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "fake")
 bot = Bot(token=TELEGRAM_TOKEN, parse_mode=ParseMode.HTML)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
-
 media_groups = defaultdict(list)
 
 class ProfileFSM(StatesGroup):
@@ -123,44 +120,68 @@ async def handle_manual_city(message: Message, state: FSMContext):
     await state.set_state(ProfileFSM.photos)
 
 @router.message(ProfileFSM.photos, F.photo)
-async def handle_album_photos(message: Message, state: FSMContext):
-    media_group_id = message.media_group_id
+async def handle_photos(message: Message, state: FSMContext):
     user_id = message.from_user.id
-
+    media_group_id = message.media_group_id
     if media_group_id:
         media_groups[(user_id, media_group_id)].append(message.photo[-1].file_id)
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(2.5) 
 
-        if len(media_groups[(user_id, media_group_id)]) >= 1:
-            file_ids = media_groups.pop((user_id, media_group_id))
-            photos = []
+        file_ids = media_groups.pop((user_id, media_group_id), [])
+        if not file_ids:
+            await message.answer("❌ Не удалось обработать фото.")
+            return
 
-            for file_id in file_ids:
-                tg_file = await bot.get_file(file_id)
-                download_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{tg_file.file_path}"
+        photos = []
+        for file_id in file_ids:
+            tg_file = await bot.get_file(file_id)
+            url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{tg_file.file_path}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    content = await resp.read()
 
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(download_url) as resp:
-                        content = await resp.read()
+            object_name = f"{user_id}_{int(time.time() * 1000)}.jpg"
+            minio_client.put_object(
+                bucket_name=BUCKET_NAME,
+                object_name=object_name,
+                data=BytesIO(content),
+                length=len(content),
+                content_type="image/jpeg"
+            )
+            photos.append(object_name)
 
-                object_name = f"{user_id}_{int(time.time() * 1000)}.jpg"
-                minio_client.put_object(
-                    bucket_name=BUCKET_NAME,
-                    object_name=object_name,
-                    data=BytesIO(content),
-                    length=len(content),
-                    content_type="image/jpeg"
-                )
-                photos.append(object_name)
+        await state.update_data(photos=photos)
+        await state.set_state(ProfileFSM.preview)
+        await message.answer("📸 Фото загружены. Нажми '✅ Всё верно' или '🔄 Заполнить заново'.", reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="✅ Всё верно")], [KeyboardButton(text="🔄 Заполнить заново")]],
+            resize_keyboard=True
+        ))
+    else:
+        try:
+            file_id = message.photo[-1].file_id
+            tg_file = await bot.get_file(file_id)
+            url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{tg_file.file_path}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    content = await resp.read()
 
-            await state.update_data(photos=photos)
+            object_name = f"{user_id}_{int(time.time() * 1000)}.jpg"
+            minio_client.put_object(
+                bucket_name=BUCKET_NAME,
+                object_name=object_name,
+                data=BytesIO(content),
+                length=len(content),
+                content_type="image/jpeg"
+            )
+            await state.update_data(photos=[object_name])
             await state.set_state(ProfileFSM.preview)
-            await message.answer("Фото добавлены. Нажми '✅ Всё верно' или '🔄 Заполнить заново'.", reply_markup=ReplyKeyboardMarkup(
+            await message.answer("📸 Фото загружено. Нажми '✅ Всё верно' или '🔄 Заполнить заново'.", reply_markup=ReplyKeyboardMarkup(
                 keyboard=[[KeyboardButton(text="✅ Всё верно")], [KeyboardButton(text="🔄 Заполнить заново")]],
                 resize_keyboard=True
             ))
-    else:
-        await message.answer("Пожалуйста, отправь все фото одновременно (альбомом).")
+        except Exception as e:
+            logger.exception("Ошибка при загрузке фото")
+            await message.answer(f"❌ Не удалось загрузить фото: {e}")
 
 @router.message(ProfileFSM.preview, F.text)
 async def handle_preview_response(message: Message, state: FSMContext):
@@ -183,21 +204,17 @@ async def handle_preview_response(message: Message, state: FSMContext):
         }
 
         async with aiohttp.ClientSession() as session:
-            async with session.post("http://user_service:8000/profile", json=profile) as resp:
-                await resp.text()
+            await session.post("http://user_service:8000/profile", json=profile)
             try:
                 async with session.post("http://rating_service:8000/rate", json=profile) as resp:
                     rating_data = await resp.json()
-                    rating = rating_data.get("rating")
-                    logger.info(f"✅ Рейтинг анкеты: {rating}")
+                    profile["rating"] = rating_data.get("rating")
             except Exception as e:
                 logger.warning(f"❌ Не удалось получить рейтинг: {e}")
+                profile["rating"] = None
 
         kb = ReplyKeyboardMarkup(
-            keyboard=[
-                [KeyboardButton(text="📄 Мой профиль")],
-                [KeyboardButton(text="💘 Начать поиск")]
-            ],
+            keyboard=[[KeyboardButton(text="📄 Мой профиль")], [KeyboardButton(text="💘 Начать поиск")]],
             resize_keyboard=True
         )
         await message.answer("✅ Анкета успешно сохранена!", reply_markup=kb)
@@ -206,7 +223,6 @@ async def handle_preview_response(message: Message, state: FSMContext):
     elif "заново" in text:
         await state.clear()
         await start_profile(message, state)
-
 
 async def show_preview(message: Message, data: dict):
     gender_icon = "👨" if data["gender"] == "male" else "👩"
@@ -219,6 +235,9 @@ async def show_preview(message: Message, data: dict):
         f"🎯 Интересы: {interests}\n"
         f"📍 Город: {data['city']}"
     )
+    rating = data.get("rating")
+    if rating is not None:
+        caption += f"\n⭐️ Рейтинг: {rating:.1f}"
 
     media = []
     for idx, object_name in enumerate(data['photos']):
@@ -226,12 +245,10 @@ async def show_preview(message: Message, data: dict):
         content = file.read()
         file.close()
         file.release_conn()
-
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
         tmp_file.write(content)
         tmp_file.close()
         input_file = FSInputFile(tmp_file.name)
-
         if idx == 0:
             media.append(InputMediaPhoto(media=input_file, caption=caption, parse_mode=ParseMode.HTML))
         else:
@@ -244,8 +261,6 @@ async def show_preview(message: Message, data: dict):
 
 @router.message(F.text == "📄 Мой профиль")
 @router.message(Command("myprofile"))
-@router.message(F.text == "📄 Мой профиль")
-@router.message(Command("myprofile"))
 async def show_my_profile(message: Message):
     user_id = str(message.from_user.id)
 
@@ -254,55 +269,50 @@ async def show_my_profile(message: Message):
             if resp.status != 200:
                 await message.answer("❌ Анкета не найдена.")
                 return
-            data = await resp.json()
-
-        rating = None
+            profile = await resp.json()
         try:
-            async with session.post("http://rating_service:8000/rate", json=data) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    rating = result.get("rating", "--")
-        except Exception as e:
-            logging.warning(f"Не удалось получить рейтинг: {e}")
+            async with session.post("http://rating_service:8000/rate", json=profile) as resp:
+                rating_data = await resp.json()
+                rating = rating_data.get("rating")
+        except Exception:
+            rating = None
 
-    gender_icon = "👨" if data["gender"] == "male" else "👩"
-    interests = ', '.join(data['interests']) if data['interests'] else '—'
-    rating_text = f"{rating or '--'}/100"
-
-    text = (
+    gender_icon = "👨" if profile["gender"] == "male" else "👩"
+    interests = ', '.join(profile["interests"]) if profile["interests"] else "—"
+    caption = (
         f"<b>Вот как выглядит анкета:</b>\n\n"
-        f"👤 Имя: {data['name']}\n"
-        f"🎂 Возраст: {data['age']}\n"
-        f"{gender_icon} Пол: {'Мужской' if data['gender'] == 'male' else 'Женский'}\n"
+        f"👤 Имя: {profile['name']}\n"
+        f"🎂 Возраст: {profile['age']}\n"
+        f"{gender_icon} Пол: {'Мужской' if profile['gender'] == 'male' else 'Женский'}\n"
         f"🎯 Интересы: {interests}\n"
-        f"📍 Город: {data['city']}\n"
-        f"⭐ Рейтинг: {rating_text}"
+        f"📍 Город: {profile['city']}"
     )
+    if rating is not None:
+        caption += f"\n⭐️ Рейтинг: {rating:.1f}"
 
-    if data.get("photos"):
-        media = []
-        for idx, photo_url in enumerate(data['photos']):
-            object_name = photo_url.rsplit("/", 1)[-1]
-            file = minio_client.get_object(BUCKET_NAME, object_name)
-            content = file.read()
-            file.close()
-            file.release_conn()
-            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
-            tmp_file.write(content)
-            tmp_file.close()
-            fs_file = FSInputFile(tmp_file.name)
-            if idx == 0:
-                media.append(InputMediaPhoto(media=fs_file, caption=text, parse_mode=ParseMode.HTML))
-            else:
-                media.append(InputMediaPhoto(media=fs_file))
+    media = []
+    for idx, photo_url in enumerate(profile["photos"]):
+        object_name = photo_url.rsplit("/", 1)[-1]
+        response = minio_client.get_object(BUCKET_NAME, object_name)
+        content = response.read()
+        response.close()
+        response.release_conn()
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        file = FSInputFile(tmp_path)
+        if idx == 0:
+            media.append(InputMediaPhoto(media=file, caption=caption, parse_mode="HTML"))
+        else:
+            media.append(InputMediaPhoto(media=file))
 
+    if media:
         if len(media) > 1:
             await bot.send_media_group(chat_id=message.chat.id, media=media)
         else:
-            await bot.send_photo(chat_id=message.chat.id, photo=media[0].media, caption=text, parse_mode=ParseMode.HTML)
+            await message.answer_photo(media[0].media, caption=caption, parse_mode="HTML")
     else:
-        await message.answer(text, parse_mode=ParseMode.HTML)
-
+        await message.answer(caption, parse_mode="HTML")
 
 app = FastAPI()
 dp.include_router(router)
