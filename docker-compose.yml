@@ -7,6 +7,7 @@ services:
       - user_service
       - minio
       - matchmaking_service
+      - rating_worker
     env_file:
       - .env
     ports:
@@ -21,10 +22,14 @@ services:
     networks:
       - dating_net
 
-  rating_service:
+  rating_worker:
     build: ./rating_service
-    ports:
-      - "8001:8000"
+    command: celery -A celery worker --loglevel=info -Q rating
+    depends_on:
+      - redis
+      - rabbitmq
+    environment:
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
     networks:
       - dating_net
 
@@ -41,6 +46,17 @@ services:
     image: redis:7
     ports:
       - "6379:6379"
+    networks:
+      - dating_net
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
     networks:
       - dating_net
 
